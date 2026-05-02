@@ -1,0 +1,196 @@
+import asyncio
+import random
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import InlineKeyboardButton, CallbackQuery
+
+# НАСТРОЙКИ
+TOKEN = "8439816119:AAFCZFXMuYqtBx8O6zogoFNj6ZizuXDVZcE"
+YOUR_CHANNEL = "@zxcadski"
+CHANNEL_URL = "https://t.me/zxcadski"
+DAILY_BONUS = 2500
+
+bot = Bot(token=TOKEN)
+dp = Dispatcher()
+
+users = {}
+
+def main_menu():
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="💣 Мины", callback_data="game_mines"))
+    kb.row(InlineKeyboardButton(text="🎰 Рулетка", callback_data="game_roulette"))
+    kb.row(InlineKeyboardButton(text="💰 Баланс", callback_data="balance"))
+    kb.row(InlineKeyboardButton(text="🎁 Ежедневный бонус", callback_data="daily"))
+    kb.add(InlineKeyboardButton(text="📢 ZXC ADSKI - ПОДПИШИСЬ", url=CHANNEL_URL))
+    return kb.as_markup()
+
+def mines_keyboard(game):
+    kb = InlineKeyboardBuilder()
+    for i in range(25):
+        label = "❓" if i not in game["opened"] else game["board"][i]
+        kb.button(text=label, callback_data=f"mine_{i}")
+    kb.button(text="💰 Забрать выигрыш", callback_data="mine_cashout")
+    kb.adjust(5)
+    return kb.as_markup()
+
+@dp.message(Command("start"))
+async def start(message: types.Message):
+    uid = message.from_user.id
+    if uid not in users:
+        users[uid] = {"balance": DAILY_BONUS, "last_daily": None}
+    await message.answer(
+        f"🎰 Добро пожаловать в Valera Casino, {message.from_user.full_name}!\n"
+        f"Твой стартовый баланс: {DAILY_BONUS} Valera coins.\n\n"
+        f"🔥 Подпишись на канал {YOUR_CHANNEL} - там эксклюзивные розыгрыши и стратегии!\n\n"
+        f"Выбирай игру:",
+        reply_markup=main_menu()
+    )
+
+@dp.callback_query(F.data == "balance")
+async def show_balance(call: CallbackQuery):
+    uid = call.from_user.id
+    if uid not in users:
+        users[uid] = {"balance": 0, "last_daily": None}
+    await call.answer(f"💰 Баланс: {users[uid]['balance']} Valera coins", show_alert=True)
+
+@dp.callback_query(F.data == "daily")
+async def daily_bonus(call: CallbackQuery):
+    uid = call.from_user.id
+    if uid not in users:
+        users[uid] = {"balance": 0, "last_daily": None}
+    users[uid]["balance"] += DAILY_BONUS
+    await call.message.answer(
+        f"🎁 Ты получил {DAILY_BONUS} Valera coins!\n\n"
+        f"🔥 Хочешь больше эксклюзивных бонусов и розыгрышей?\n"
+        f"Подписывайся: {YOUR_CHANNEL} 👈",
+        reply_markup=main_menu()
+    )
+    await call.answer()
+
+@dp.callback_query(F.data == "game_mines")
+async def mines_start(call: CallbackQuery):
+    uid = call.from_user.id
+    bet = 200
+    if uid not in users:
+        users[uid] = {"balance": 0, "last_daily": None}
+    if users[uid]["balance"] < bet:
+        await call.answer("❌ Недостаточно Valera coins! Получи ежедневный бонус.", show_alert=True)
+        return
+    users[uid]["balance"] -= bet
+    board = ["💎"] * 25
+    mines_positions = random.sample(range(25), 5)
+    for pos in mines_positions:
+        board[pos] = "💣"
+    users[uid]["mines_game"] = {
+        "board": board,
+        "opened": set(),
+        "bet": bet,
+        "multiplier": 1.0
+    }
+    await call.message.answer(
+        f"💣 Мины: поле 5x5, 5 мин.\nСтавка: {bet} Valera coins.\n"
+        f"Открывай ячейки, множитель растёт! Если попадётся мина — теряешь всё.\n"
+        f"📢 Не забудь подписаться: {YOUR_CHANNEL}",
+        reply_markup=mines_keyboard(users[uid]["mines_game"])
+    )
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("mine_"))
+async def mines_click(call: CallbackQuery):
+    uid = call.from_user.id
+    game = users[uid].get("mines_game")
+    if not game:
+        await call.answer("Игра не найдена. Начни заново.", show_alert=True)
+        return
+    index = int(call.data.split("_")[1])
+    if index in game["opened"]:
+        await call.answer("Уже открыта!")
+        return
+    game["opened"].add(index)
+    cell = game["board"][index]
+    if cell == "💣":
+        await call.message.edit_text(
+            f"💥 БАБАХ! Ты попал на мину!\nПотеряно: {game['bet']} Valera coins.\n\n"
+            f"😢 Не повезло. Подпишись на {YOUR_CHANNEL} — там делятся стратегиями!",
+            reply_markup=main_menu()
+        )
+        del users[uid]["mines_game"]
+        await call.answer("Мина!")
+        return
+    game["multiplier"] += 0.7
+    potential = int(game["bet"] * game["multiplier"])
+    await call.message.edit_text(
+        f"💎 Алмаз! Множитель: x{game['multiplier']:.1f}\nПотенциальный выигрыш: {potential} Valera coins.",
+        reply_markup=mines_keyboard(game)
+    )
+    await call.answer()
+
+@dp.callback_query(F.data == "mine_cashout")
+async def mines_cashout(call: CallbackQuery):
+    uid = call.from_user.id
+    game = users[uid].get("mines_game")
+    if not game:
+        await call.answer("Игра не найдена!")
+        return
+    win = int(game["bet"] * game["multiplier"])
+    users[uid]["balance"] += win
+    await call.message.edit_text(
+        f"💰 Ты забрал {win} Valera coins! (x{game['multiplier']:.1f})\n\n"
+        f"🎉 Поздравляем! Залетай в {YOUR_CHANNEL} — там ещё больше плюшек!",
+        reply_markup=main_menu()
+    )
+    del users[uid]["mines_game"]
+    await call.answer(f"Выигрыш: {win}!")
+
+@dp.callback_query(F.data == "game_roulette")
+async def roulette_start(call: CallbackQuery):
+    await call.message.answer(
+        "🎰 Рулетка: введи сообщение в формате:\n"
+        "`ставка число1 число2 ...`\n\n"
+        "Например: `100 3 7 13`\n"
+        "Ставка делится поровну на все числа. Если выпадет твоё число — выигрыш x36!\n\n"
+        f"📢 Канал: {YOUR_CHANNEL}",
+        parse_mode="HTML"
+    )
+    await call.answer()
+
+@dp.message(F.text.regexp(r'^\d+(\s+\d+)+$'))
+async def roulette_play(message: types.Message):
+    uid = message.from_user.id
+    if uid not in users:
+        users[uid] = {"balance": 0, "last_daily": None}
+    parts = message.text.split()
+    total_bet = int(parts[0])
+    numbers = [int(n) for n in parts[1:] if 0 <= int(n) <= 36]
+    if not numbers:
+        await message.answer("Укажи числа от 0 до 36.")
+        return
+    if total_bet > users[uid]["balance"]:
+        await message.answer("❌ Недостаточно Valera coins!")
+        return
+    bet_per_number = total_bet // len(numbers)
+    if bet_per_number < 1:
+        await message.answer("Слишком маленькая ставка на число.")
+        return
+    users[uid]["balance"] -= bet_per_number * len(numbers)
+    result = random.randint(0, 36)
+    win_amount = 0
+    if result in numbers:
+        win_amount = bet_per_number * 36
+        users[uid]["balance"] += win_amount
+    await message.answer(
+        f"🎰 Ставка: {bet_per_number} VC x {len(numbers)} чисел\n"
+        f"Твои числа: {', '.join(map(str, numbers))}\n"
+        f"Выпало: {result}\n\n"
+        f"{'🎉 ВЫИГРЫШ: ' + str(win_amount) + ' Valera coins!' if win_amount else '😢 Мимо. Крути ещё!'}\n\n"
+        f"📢 Подпишись на {YOUR_CHANNEL} — там эксклюзивные бонусы!",
+        reply_markup=main_menu()
+    )
+
+async def main():
+    print("🤖 Valera Casino запущен! Жми CTRL+C для остановки.")
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
